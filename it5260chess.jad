@@ -1,0 +1,8 @@
+MIDlet-1: it5260 Chess, , chess.ChessMIDlet
+MIDlet-Name: it5260 Chess
+MIDlet-Version: 0.1.0
+MIDlet-Vendor: (your name/handle here)
+MIDlet-Jar-URL: it5260chess.jar
+MIDlet-Jar-Size: FILL_IN_AFTER_BUILD
+MicroEdition-Configuration: CLDC-1.1
+MicroEdition-Profile: MIDP-2.0

@@ -1,0 +1,118 @@
+name: Build it5260 Chess
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # JDK 8 is what actually-working J2ME projects use for this (e.g.
+      # gtrxAC/discord-j2me's README says explicitly: "The JDK listed here
+      # must support targeting Java 1.2 (J2ME)"). Modern JDKs (9+) dropped
+      # -source/-target support for anything this old.
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          java-version: '8'
+          distribution: 'temurin'
+
+      # CLDC 1.1 / MIDP 2.0 API stub jars. org.microemu's build is old
+      # (last released Jan 2010) but that's fine - these are just empty
+      # method signatures for javac to compile against, not runtime code,
+      # and this exact groupId/artifactId/version is what multiple
+      # independent J2ME build guides and Maven POMs reference.
+      - name: Download CLDC/MIDP API stubs
+        run: |
+          mkdir -p sdk/lib
+          curl -fL -o sdk/lib/cldcapi11.jar \
+            https://repo1.maven.org/maven2/org/microemu/cldcapi11/2.0.4/cldcapi11-2.0.4.jar
+          curl -fL -o sdk/lib/midpapi20.jar \
+            https://repo1.maven.org/maven2/org/microemu/midpapi20/2.0.4/midpapi20-2.0.4.jar
+
+      # ProGuard (Guardsquare) doubles as the preverifier here via the
+      # -microedition config flag - confirmed against discord-j2me's actual
+      # midlets.pro, which uses exactly this. Fetching "latest" via the API
+      # instead of a pinned version/path, since the exact zip internal
+      # layout can change between releases - the `find` below locates
+      # proguard.jar wherever it ends up rather than assuming a fixed path.
+      - name: Download ProGuard
+        run: |
+          URL=$(curl -fsSL https://api.github.com/repos/Guardsquare/proguard/releases/latest \
+            | grep browser_download_url | grep '\.zip"' | cut -d '"' -f 4)
+          curl -fL -o proguard.zip "$URL"
+          unzip -q proguard.zip -d proguard_extracted
+          PG_JAR=$(find proguard_extracted -name 'proguard.jar' | head -1)
+          echo "PG_JAR=$PG_JAR" >> $GITHUB_ENV
+
+      - name: Compile
+        run: |
+          mkdir -p classes
+          find src/chess -name '*.java' > sources.txt
+          javac -source 1.2 -target 1.2 -Xlint:-options \
+                -bootclasspath sdk/lib/cldcapi11.jar:sdk/lib/midpapi20.jar \
+                -d classes @sources.txt
+
+      - name: Package unverified JAR
+        run: |
+          cat > manifest.mf << 'EOF'
+          Manifest-Version: 1.0
+          MIDlet-1: it5260 Chess, , chess.ChessMIDlet
+          MIDlet-Name: it5260 Chess
+          MIDlet-Version: 0.1.0
+          MIDlet-Vendor: it5260chess
+          MicroEdition-Configuration: CLDC-1.1
+          MicroEdition-Profile: MIDP-2.0
+          EOF
+          cd classes && jar cf ../unverified.jar . && cd ..
+          jar ufm unverified.jar manifest.mf
+
+      # This is the preverify step. -microedition tells ProGuard to do
+      # CLDC/MIDP-style preverification instead of normal desktop/Android
+      # processing; -dontobfuscate/-dontoptimize keep this pass predictable
+      # for a first working build - shrinking can be turned on later once
+      # this is confirmed to actually run on the phone.
+      - name: Preverify with ProGuard
+        run: |
+          cat > midlets.pro << EOF
+          -injars unverified.jar
+          -outjars it5260chess.jar
+          -libraryjars sdk/lib/midpapi20.jar
+          -libraryjars sdk/lib/cldcapi11.jar
+          -microedition
+          -target 1.2
+          -dontobfuscate
+          -dontoptimize
+          -dontnote
+          -dontwarn
+          -keep public class chess.ChessMIDlet
+          EOF
+          java -jar "$PG_JAR" @midlets.pro
+
+      - name: Generate final JAD with correct jar size
+        run: |
+          SIZE=$(wc -c < it5260chess.jar)
+          cat > it5260chess.jad << EOF
+          MIDlet-1: it5260 Chess, , chess.ChessMIDlet
+          MIDlet-Name: it5260 Chess
+          MIDlet-Version: 0.1.0
+          MIDlet-Vendor: it5260chess
+          MIDlet-Jar-URL: it5260chess.jar
+          MIDlet-Jar-Size: $SIZE
+          MicroEdition-Configuration: CLDC-1.1
+          MicroEdition-Profile: MIDP-2.0
+          EOF
+          echo "Built it5260chess.jar ($SIZE bytes)"
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: it5260chess-build
+          path: |
+            it5260chess.jar
+            it5260chess.jad
