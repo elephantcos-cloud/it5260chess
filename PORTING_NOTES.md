@@ -150,10 +150,51 @@ a proven pattern" is accurate; "guaranteed to work first try" is not. Most
 likely first-run friction points, if any: ProGuard version differences,
 or a MIDlet-Vendor/name detail worth personalizing.
 
-### Getting this into a repo (Termux)
+### Real hardware test #1: "Not enough memory" on launch - 2 real bugs found
+
+The build pipeline worked end to end - jar compiled, preverified, packaged,
+and installed on the actual it5260. It just wouldn't launch. Two separate,
+serious issues, both in Evaluate.java:
+
+1. **A guaranteed crash, on any device.** The `Evaluate()` constructor
+   unconditionally tried to load `/kpk.bitbase` and `/krkp.winmasks` - two
+   endgame tablebase files that were *never actually bundled into the jar*
+   (120KB deliberately left out early on, flagged as a decision point back
+   then, but never circled back to actually resolve). `getResourceAsStream`
+   for a missing resource returns null, so this crashed with a
+   NullPointerException every single time - independent of how much memory
+   the phone has. Fixed: the constructor no longer tries to load them, and
+   `kpkEval()`/`krkpEval()` (the two places that read those tables) now
+   check for null and fall back to a reasonable approximation instead of
+   indexing into nothing.
+
+2. **The actual memory problem, almost certainly.** Two lookup caches -
+   `pawnHash` (65536 entries) and `kingSafetyHash` (32768 entries) - were
+   still sized for Android, together costing roughly 2.4MB. Both are pure
+   caches (a key field gets checked before trusting a cached value, so nothing
+   downstream can misbehave from a "wrong" cached entry - it's simply
+   treated as a miss and recomputed), so shrinking them is a
+   performance-only change with zero correctness risk. Cut to 256 and 128
+   entries - roughly 2.37MB freed.
+
+**Known remaining risk, sized but not yet addressed:** BitBoard's magic
+rook/bishop attack tables total ~745KB (708KB rook + 37.5KB bishop) -
+computed precisely from the `rBits`/`bBits` arrays, not estimated. Unlike
+the two caches above, this isn't simple to shrink - magic bitboards are a
+perfect-hash technique tied to specific magic-number constants matched to
+specific table sizes; shrinking the table without deriving new, smaller
+magic numbers would cause hash collisions and wrong move generation, a
+correctness bug rather than a performance one. Left alone for now since
+~2.37MB freed may well be enough on its own - if "not enough memory" turns
+up again on the next attempt, this is the next, harder thing to tackle
+(most likely by replacing magic-bitboard sliding-piece attacks with
+slower-but-memory-free ray-casting, a bigger change than anything done so
+far in Phase 3/4).
 
 The whole project is bundled as a single zip for exactly this step. Once
 it's on the phone (wherever downloads land, typically `~/storage/downloads`
+### Getting this into a repo (Termux)
+
 if storage permission is set up, or `/sdcard/Download`):
 
 ```bash

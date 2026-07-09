@@ -19,20 +19,25 @@
 package chess;
 
 // Adapted for J2ME/CLDC 1.1 (it5260 build): this file was almost entirely
-// clean already (it's mostly arithmetic and array lookups). Two real fixes:
-//  - readTable(): try-with-resources is Java 7+, not in CLDC, so it's now a
-//    plain try/finally with an explicit close(). While there, also fixed
-//    what looks like a genuine upstream bug - the byte array was always
-//    allocated at the KPK-table size regardless of which resource was being
-//    loaded, silently ignoring the `length` parameter.
+// clean already (it's mostly arithmetic and array lookups). Real fixes:
+//  - The endgame bitbase files (kpk.bitbase/krkp.winmasks) were never
+//    bundled into the jar (120KB deliberately left out) - the constructor
+//    that used to load them, and the readTable() helper it used, are gone;
+//    kpkEval()/krkpEval() now check for the null tables and fall back to
+//    an approximation instead of crashing on every single launch, which is
+//    what was actually happening regardless of available memory.
 //  - Long.bitCount() is Java 5+, not in CLDC 1.1, and this file calls it ~45
 //    times (mobility/king-safety/pawn-structure scoring). Replaced with
 //    BitBoard.bitCount(), a hand-written popcount added there for this
 //    reason. Also fixed 2 stray Long.numberOfTrailingZeros() calls (same
 //    Java-5+ problem) to use the existing BitBoard.numberOfTrailingZeros()
 //    that the rest of this file already uses everywhere else.
-import java.io.IOException;
-import java.io.InputStream;
+//  - pawnHash and kingSafetyHash (two lookup caches) were sized for Android
+//    (65536 and 32768 entries, ~1.6MB+~780KB combined) - almost certainly
+//    the real cause of "not enough memory" on the actual phone. Both are
+//    pure caches (checked via a key field before trusting a cached value),
+//    so shrinking them is a performance-only change, cut to 256 and 128
+//    entries respectively.
 
 /** Position evaluation routines. */
 public class Evaluate {
@@ -225,7 +230,13 @@ public class Evaluate {
     }
     private static final PawnHashData[] pawnHash;
     static {
-        final int numEntries = 1<<16;
+        // Android used 1<<16 (65536 entries, ~1.6MB) - drastically too big
+        // for this device, and very likely the actual cause of "not enough
+        // memory" on launch, along with kingSafetyHash below. This is a
+        // pure cache (see the key-mismatch check in pawnBonus() above) -
+        // shrinking it only means more cache misses/recomputation, never
+        // a wrong score, so it's safe to cut hard.
+        final int numEntries = 1<<8;
         pawnHash = new PawnHashData[numEntries];
         for (int i = 0; i < numEntries; i++) {
             PawnHashData phd = new PawnHashData();
@@ -244,39 +255,15 @@ public class Evaluate {
     private long wAttacksBB, bAttacksBB;
     private long wPawnAttacks, bPawnAttacks; // Squares attacked by white/black pawns
 
-    /** Constructor. */
+    /** Constructor.
+     *  kpk.bitbase/krkp.winmasks were never bundled into the jar (120KB we
+     *  deliberately left out to save space - see PORTING_NOTES.md), so
+     *  kpkTable/krkpTable stay null. kpkEval()/krkpEval() below both check
+     *  for that and fall back to an approximation instead of indexing into
+     *  a null array, which is what was actually crashing every launch,
+     *  independent of the phone's memory situation.
+     */
     public Evaluate() {
-        if (kpkTable == null)
-            kpkTable = readTable("/kpk.bitbase", 2*32*64*48/8);
-        if (krkpTable == null)
-            krkpTable = readTable("/krkp.winmasks", 2*32*48*8);
-    }
-
-    private byte[] readTable(String resource, int length) {
-        byte[] table = new byte[length];
-        InputStream inStream = getClass().getResourceAsStream(resource);
-        try {
-            int off = 0;
-            while (off < table.length) {
-                int len = inStream.read(table, off, table.length - off);
-                if (len < 0)
-                    throw new RuntimeException();
-                off += len;
-            }
-            return table;
-        } catch (IOException e) {
-            // RuntimeException(Throwable) isn't in the CLDC API stub (only
-            // the String constructor is) - CLDC predates exception chaining.
-            throw new RuntimeException(e.toString());
-        } finally {
-            if (inStream != null) {
-                try {
-                    inStream.close();
-                } catch (IOException e) {
-                    // ignore close failure
-                }
-            }
-        }
     }
 
     /**
@@ -901,7 +888,9 @@ public class Evaluate {
     }
     private static final KingSafetyHashData[] kingSafetyHash;
     static {
-        final int numEntries = 1 << 15;
+        // Same story as pawnHash above: Android used 1<<15 (32768 entries,
+        // ~780KB), cut hard since this is also just a cache.
+        final int numEntries = 1 << 7;
         kingSafetyHash = new KingSafetyHashData[numEntries];
         for (int i = 0; i < numEntries; i++) {
             KingSafetyHashData ksh = new KingSafetyHashData();
@@ -1210,6 +1199,11 @@ public class Evaluate {
         index = index * 64 + bKing;
         index = index * 48 + wPawn - 8;
 
+        if (kpkTable == null) {
+            // No tablebase bundled - treat as "not a known draw", the same
+            // value the table gives for the large majority of KPK positions.
+            return qV - pV / 4 * (7-Position.getY(wPawn));
+        }
         int bytePos = index / 8;
         int bitPos = index % 8;
         boolean draw = (((int)kpkTable[bytePos]) & (1 << bitPos)) == 0;
@@ -1228,8 +1222,15 @@ public class Evaluate {
         index = index * 32 + Position.getY(bKing)*4+Position.getX(bKing);
         index = index * 48 + bPawn - 8;
         index = index * 8 + Position.getY(wKing);
-        byte mask = krkpTable[index];
-        boolean canWin = (mask & (1 << Position.getX(wKing))) != 0;
+        boolean canWin;
+        if (krkpTable == null) {
+            // No tablebase bundled - default to the more common case
+            // (rook side can win) rather than indexing a null array.
+            canWin = true;
+        } else {
+            byte mask = krkpTable[index];
+            canWin = (mask & (1 << Position.getX(wKing))) != 0;
+        }
 
         int score = rV - pV + Position.getY(bPawn) * pV / 4;
         if (canWin)
