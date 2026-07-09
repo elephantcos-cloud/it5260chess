@@ -2,7 +2,7 @@ name: Build it5260 Chess
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
