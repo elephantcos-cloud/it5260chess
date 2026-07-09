@@ -634,9 +634,21 @@ public class Position {
         return hashRnd.nextLong();
     }
 
+    // Long.toHexString() isn't in the CLDC API stub either - manual hex
+    // conversion for this debug toString().
+    private static String toHex(long v) {
+        char[] digits = "0123456789abcdef".toCharArray();
+        StringBuffer sb = new StringBuffer(16);
+        for (int i = 15; i >= 0; i--) {
+            int nibble = (int) ((v >>> (i * 4)) & 0xF);
+            sb.append(digits[nibble]);
+        }
+        return sb.toString();
+    }
+
     /** Useful for debugging. */
     public final String toString() {
         return TextIO.asciiBoard(this) + (whiteMove ? "white\n" : "black\n") +
-                Long.toHexString(zobristHash()) + "\n";
+                toHex(zobristHash()) + "\n";
     }
 }

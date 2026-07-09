@@ -265,7 +265,9 @@ public class Evaluate {
             }
             return table;
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            // RuntimeException(Throwable) isn't in the CLDC API stub (only
+            // the String constructor is) - CLDC predates exception chaining.
+            throw new RuntimeException(e.toString());
         } finally {
             if (inStream != null) {
                 try {

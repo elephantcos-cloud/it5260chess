@@ -93,32 +93,108 @@ simplification, not an oversight.
 draw-offer UI (the engine supports draw claims - `Game.handleDrawCmd()` -
 there's just no menu entry for it yet).
 
-### Phase 4: what actually exists vs. what's still yours to do
+### First real compile against actual CLDC/MIDP jars: 7 errors, all fixed
 
-`ChessMIDlet.java` (minimal launcher) and `it5260chess.jad` (descriptor
-template) both exist now. **Read this part carefully:** I cannot compile,
-preverify, package into a real `.jar`, or run/test any of this - there's no
-CLDC/MIDP toolchain, preverify tool, or phone/emulator available in this
-sandbox. "Finished" here means the source code is complete for a working
-v1 game; it does not mean tested-and-working. The remaining, genuinely
-yours-to-do steps:
+This is exactly why compiling against the real stub jars (not a host JDK's
+own libraries) matters - it caught things a manual read-through missed:
 
-1. Compile all of `src/chess/*.java` against real CLDC-1.1/MIDP-2.0 API
-   jars (not your host JDK's own libraries - see the bootclasspath point
-   from earlier in this file).
-2. Preverify the compiled classes (the ProGuard/pyx4me lead from earlier,
-   or whatever else turns up - still not confirmed working, flagged
-   honestly rather than guessed at).
-3. Package classes + manifest into `it5260chess.jar`.
-4. Open `it5260chess.jad`, fill in `MIDlet-Jar-Size` with the exact byte
-   size of the jar you just built (this has to match exactly or some
-   phones refuse to install it), and adjust `MIDlet-Vendor`.
-5. Test in J2ME-Loader on your Realme C25Y first - fast iteration loop,
-   no preverify concerns there from what we found earlier.
-6. Only once that's solid, try the real it5260 (microSD card is the
-   likely install path for a phone like this, not yet confirmed for this
-   exact model).
+- **Search.java**: `private TreeLogger log = null;` - a field referencing
+  the file I deliberately didn't port (search-tree debug logging). Every
+  single use was already guarded `if (log != null) log.foo(...)`, and the
+  only assignment was commented out in the original source - so `log` was
+  always null anyway. Removed the field and all ~18 dead guarded calls.
+- **Evaluate.java**: `throw new RuntimeException(e)` - the `Throwable`
+  constructor isn't in this CLDC stub, only `RuntimeException(String)`
+  (CLDC 1.1 predates Java's exception-chaining feature). Changed to
+  `RuntimeException(e.toString())`.
+- **Position.java**: `Long.toHexString()` - not in CLDC. Added a small
+  manual hex-digit-by-digit converter for this one debug `toString()`.
+- **TextIO.java**: `String.split()` and `String.replaceAll()` both need
+  `java.util.regex`, which doesn't exist in CLDC at all - not even a
+  reduced version. Added `splitOnSpace()`/`removeChar()` as hand-written
+  replacements for the two places these were used (FEN parsing, stripping
+  "=" from promotion notation).
+- **BitBoard.java**: two internal `Long.bitCount()` calls that got missed
+  earlier - I'd fixed every *other* file's usage when this was first found
+  (while porting Game.java) but never re-checked BitBoard.java's own
+  original code for the same pattern, only added the replacement method
+  there. Now uses its own `bitCount()` directly (no `BitBoard.` qualifier
+  needed from inside the same class).
 
-I'll help debug whatever breaks at any of these steps - compiler errors,
-preverify complaints, runtime crashes in the emulator, all of it. That
-troubleshooting is the realistic remaining work, not a formality.
+Did a broader proactive scan afterward for other likely-too-new String/
+Long/Integer methods (`toBinaryString`, `matches`, `contains(String)`,
+etc.) across every file - came back clean, but since javac may not surface
+every error in one pass (a type-resolution failure in one place can mask
+further errors in the same file), the next run may still turn up a few
+more. That would be normal, not a sign anything is fundamentally wrong.
+
+`.github/workflows/build.yml` does the compile → preverify → package →
+size-fill steps automatically on every push. This isn't guesswork - I found
+gtrxAC/discord-j2me, a real, currently-distributed J2ME app (a Discord
+client for feature phones), and pulled its actual build.sh/compile.sh/
+midlets.pro from GitHub to see exactly what a working pipeline does:
+JDK 8, `javac -source 1.2 -target 1.2 -bootclasspath <cldc+midp jars>`,
+then ProGuard with `-microedition -target 1.2` as the actual preverify
+step (not a separate tool - ProGuard does both preverification and
+optional shrinking together). The CLDC 1.1 / MIDP 2.0 stub jars come from
+Maven Central (`org.microemu:cldcapi11:2.0.4` and `:midpapi20:2.0.4` -
+confirmed real, current coordinates, last published 2010 but that's
+expected and fine, they're just empty method signatures for javac).
+
+**Confidence level, stated honestly:** the compile step and the stub-jar
+coordinates are verified against multiple independent real sources. The
+ProGuard/preverify step follows a real project's real, working config
+exactly - but I haven't run this specific workflow myself (no CLDC/MIDP
+toolchain in this sandbox, as covered earlier), so "should work, built on
+a proven pattern" is accurate; "guaranteed to work first try" is not. Most
+likely first-run friction points, if any: ProGuard version differences,
+or a MIDlet-Vendor/name detail worth personalizing.
+
+### Getting this into a repo (Termux)
+
+The whole project is bundled as a single zip for exactly this step. Once
+it's on the phone (wherever downloads land, typically `~/storage/downloads`
+if storage permission is set up, or `/sdcard/Download`):
+
+```bash
+cd ~
+unzip /sdcard/Download/it5260chess-project.zip
+cd it5260chess
+git init
+git add .
+git commit -m "it5260 chess: full port, keypad UI, AI, build workflow"
+gh repo create it5260chess --public --source=. --remote=origin --push
+```
+
+`gh repo create ... --source=. --remote=origin --push` creates the GitHub
+repo and pushes in one step (needs `gh auth login` done once beforehand,
+if not already). Without `gh`, the manual equivalent:
+
+```bash
+git branch -M main
+git remote add origin https://github.com/<username>/it5260chess.git
+git push -u origin main
+```
+
+Either way, the workflow in `.github/workflows/build.yml` runs
+automatically on push. Once it finishes (Actions tab → the run → green
+check), the `it5260chess-build` artifact contains `it5260chess.jar` and
+`it5260chess.jad` - download that, and those two files are what go on the
+phone (or into J2ME-Loader on the Realme first, per the earlier plan).
+
+### What's still genuinely yours to do
+
+The workflow automates compiling, preverifying, packaging, and filling in
+the jar size - that's no longer manual. What's left:
+
+1. Push to GitHub (commands above) and let the workflow run.
+2. If it fails: read the Actions log, tell me what broke, I'll fix the
+   workflow/source. This is the realistic remaining work, not a formality -
+   see the honesty note above about confidence level.
+3. Test the resulting `.jar` in J2ME-Loader on your Realme C25Y first.
+4. Only once that's solid, try the real it5260 (microSD card is the likely
+   install path for a phone like this, not yet confirmed for this exact
+   model).
+5. Still not built at all: save/load, board-flip, draw-offer UI (see
+   Phase 3 notes above) - separate follow-up work, not blocking a first
+   playable build.

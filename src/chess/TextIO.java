@@ -24,14 +24,45 @@ package chess;
 // than that debug string needs, so it's a plain "\n" literal now (see
 // asciiBoard() near the bottom of this file). StringBuilder -> StringBuffer
 // (4 occurrences) since CLDC only has the latter.
+// Found by an actual CLDC-stub compile, not by inspection: String.split()
+// and String.replaceAll() both need java.util.regex, which doesn't exist in
+// CLDC at all (not even a reduced version) - splitOnSpace()/removeChar()
+// below are hand-written replacements for the two places these were used.
+import java.util.Vector;
 
 public class TextIO {
     static public final String startPosFEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
+    private static String[] splitOnSpace(String s) {
+        Vector parts = new Vector();
+        int start = 0;
+        for (int i = 0; i <= s.length(); i++) {
+            if ((i == s.length()) || (s.charAt(i) == ' ')) {
+                if (i > start)
+                    parts.addElement(s.substring(start, i));
+                start = i + 1;
+            }
+        }
+        String[] ret = new String[parts.size()];
+        for (int i = 0; i < ret.length; i++)
+            ret[i] = (String) parts.elementAt(i);
+        return ret;
+    }
+
+    private static String removeChar(String s, char c) {
+        StringBuffer sb = new StringBuffer(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (ch != c)
+                sb.append(ch);
+        }
+        return sb.toString();
+    }
+
     /** Parse a FEN string and return a chess Position object. */
     public static Position readFEN(String fen) throws ChessParseError {
         Position pos = new Position();
-        String[] words = fen.split(" ");
+        String[] words = splitOnSpace(fen);
         if (words.length < 2) {
             throw new ChessParseError("Too few spaces");
         }
@@ -458,7 +489,7 @@ public class TextIO {
      * as long as the string only matches one valid move.
      */
     public static Move stringToMove(Position pos, String strMove) {
-        strMove = strMove.replaceAll("=", "");
+        strMove = removeChar(strMove, '=');
         if (strMove.length() == 0)
             return null;
         MoveGen.MoveList moves = MoveGen.instance.pseudoLegalMoves(pos);

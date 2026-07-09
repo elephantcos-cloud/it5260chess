@@ -235,7 +235,7 @@ public class BitBoard {
             int tableSize = 1 << rBits[sq];
             long[] table = new long[tableSize];
             for (int i = 0; i < tableSize; i++) table[i] = -1;
-            int nPatterns = 1 << Long.bitCount(rMasks[sq]);
+            int nPatterns = 1 << bitCount(rMasks[sq]);
             for (int i = 0; i < nPatterns; i++) {
                 long p = createPattern(i, rMasks[sq]);
                 int entry = (int)((p * rMagics[sq]) >>> (64 - rBits[sq]));
@@ -260,7 +260,7 @@ public class BitBoard {
             int tableSize = 1 << bBits[sq];
             long[] table = new long[tableSize];
             for (int i = 0; i < tableSize; i++) table[i] = -1;
-            int nPatterns = 1 << Long.bitCount(bMasks[sq]);
+            int nPatterns = 1 << bitCount(bMasks[sq]);
             for (int i = 0; i < nPatterns; i++) {
                 long p = createPattern(i, bMasks[sq]);
                 int entry = (int)((p * bMagics[sq]) >>> (64 - bBits[sq]));
